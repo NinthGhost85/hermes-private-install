@@ -1,161 +1,110 @@
-<#
-.SYNOPSIS
-    Install Hermes Agent on Windows (custom path edition)
-.DESCRIPTION
-    This script installs the Hermes Agent on Windows with custom default locations:
-    - HermesHome = C:\Hermes_home
-    - InstallDir = C:\Hermes_home\hermes-agent
-.PARAMETER HermesHome
-    Override the Hermes home directory (default: C:\Hermes_home)
-.PARAMETER InstallDir
-    Override the installation directory (default: C:\Hermes_home\hermes-agent)
-.PARAMETER Branch
-    Git branch to clone (default: main)
-.PARAMETER Tag
-    Git tag to clone (overrides branch if specified)
-.PARAMETER SkipSetup
-    Skip the interactive setup wizard after installation
-#>
+# install.ps1
+# Hermes Agent native Windows install script (custom directory version)
+# Requires: PowerShell 5.1+, unrestricted execution policy for this session
+# Usage: powershell -ExecutionPolicy Bypass -File install.ps1
+#
+# This version installs the entire environment under C:\Hermes_home.
+# Change $INSTALL_ROOT below to use a different location.
 
-param(
-    [string]$HermesHome,
-    [string]$InstallDir,
-    [string]$Branch = "main",
-    [string]$Tag,
-    [switch]$SkipSetup
-)
-
-# Set error handling
 $ErrorActionPreference = "Stop"
+#Requires -Version 5.1
 
-# Custom default paths (modified from original)
-if (-not $HermesHome) {
-    $HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "C:\Hermes_home" }
-}
-if (-not $InstallDir) {
-    $InstallDir = if ($env:HERMES_INSTALL_DIR) { $env:HERMES_INSTALL_DIR } else { "C:\Hermes_home\hermes-agent" }
-}
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "  Hermes Agent - Native Windows Installer" -ForegroundColor Cyan
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host ""
 
-Write-Host "Hermes Home: $HermesHome" -ForegroundColor Cyan
-Write-Host "Install Dir : $InstallDir" -ForegroundColor Cyan
+# -------------------------------------------------------------------
+# 1. Determine install directory (custom location)
+# -------------------------------------------------------------------
+$INSTALL_ROOT = "C:\Hermes_home"         # <-- set your custom path here
+$INSTALL_DIR  = $INSTALL_ROOT
+Write-Host "[*] Install directory: $INSTALL_DIR" -ForegroundColor Yellow
 
-# Create directories if they don't exist
-$null = New-Item -ItemType Directory -Force -Path $HermesHome
-$null = New-Item -ItemType Directory -Force -Path $InstallDir
+# -------------------------------------------------------------------
+# 2. Create directory structure (only the root and venv folder)
+# -------------------------------------------------------------------
+Write-Host "[*] Creating directory structure..." -ForegroundColor Yellow
+New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
+New-Item -ItemType Directory -Force -Path "$INSTALL_DIR\venv" | Out-Null
 
-# Function to update PATH environment variable for current user
-function Add-ToUserPath {
-    param([string]$NewPath)
-    $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($currentPath -notlike "*$NewPath*") {
-        $newPathValue = "$currentPath;$NewPath"
-        [Environment]::SetEnvironmentVariable("Path", $newPathValue, "User")
-        Write-Host "Added $NewPath to User PATH" -ForegroundColor Green
+# -------------------------------------------------------------------
+# 3. Check/install uv (system-wide tool)
+# -------------------------------------------------------------------
+Write-Host "[*] Checking for uv..." -ForegroundColor Yellow
+$uv = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uv) {
+    Write-Host "[*] uv not found. Installing uv via official installer..." -ForegroundColor Yellow
+    irm https://astral.sh/uv/install.ps1 | iex
+    # Refresh PATH so that uv is available immediately
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    if (-not $uv) {
+        Write-Error "uv installation failed. Please install uv manually: https://docs.astral.sh/uv/getting-started/installation/"
+        exit 1
     }
 }
+Write-Host "[*] uv found at: $($uv.Source)" -ForegroundColor Green
 
-# Check for Git
-$gitPath = Join-Path $HermesHome "git\bin\git.exe"
-if (-not (Test-Path $gitPath)) {
-    Write-Host "Installing portable Git..." -ForegroundColor Yellow
-    $gitUrl = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/PortableGit-2.47.1-64-bit.7z.exe"
-    $gitInstaller = Join-Path $env:TEMP "PortableGit.exe"
-    Invoke-WebRequest -Uri $gitUrl -OutFile $gitInstaller
-    Start-Process -FilePath $gitInstaller -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$HermesHome\git`"" -Wait
-    Remove-Item $gitInstaller -Force
-    # Add git to PATH temporarily
-    $env:Path = "$HermesHome\git\bin;$env:Path"
+# -------------------------------------------------------------------
+# 4. Create Python virtual environment using uv
+# -------------------------------------------------------------------
+Write-Host "[*] Creating Python virtual environment (this may take a moment)..." -ForegroundColor Yellow
+uv venv "$INSTALL_DIR\venv" --python 3.11
+Write-Host "[*] Virtual environment created." -ForegroundColor Green
+
+# -------------------------------------------------------------------
+# 5. Install hermes-agent and dependencies
+# -------------------------------------------------------------------
+Write-Host "[*] Installing hermes-agent..." -ForegroundColor Yellow
+& "$INSTALL_DIR\venv\Scripts\python.exe" -m pip install --upgrade pip
+& "$INSTALL_DIR\venv\Scripts\pip.exe" install hermes-agent
+Write-Host "[*] hermes-agent installed successfully." -ForegroundColor Green
+
+# -------------------------------------------------------------------
+# 6. Set HERMES_HOME environment variable (for CLI data)
+# -------------------------------------------------------------------
+Write-Host "[*] Setting HERMES_HOME=$INSTALL_ROOT" -ForegroundColor Yellow
+[Environment]::SetEnvironmentVariable("HERMES_HOME", $INSTALL_ROOT, "User")
+$env:HERMES_HOME = $INSTALL_ROOT
+Write-Host "[*] HERMES_HOME set. The CLI will create its data folders on first run." -ForegroundColor Green
+
+# -------------------------------------------------------------------
+# 7. Add venv Scripts to PATH (so 'hermes' is available globally)
+# -------------------------------------------------------------------
+$VENV_SCRIPTS = "$INSTALL_DIR\venv\Scripts"
+Write-Host "[*] Adding to user PATH: $VENV_SCRIPTS" -ForegroundColor Yellow
+
+# Add to current session PATH
+$env:Path = "$VENV_SCRIPTS;$env:Path"
+
+# Add permanently to user PATH
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$VENV_SCRIPTS*") {
+    [Environment]::SetEnvironmentVariable("Path", "$VENV_SCRIPTS;$userPath", "User")
+    Write-Host "[*] Added to user PATH permanently." -ForegroundColor Green
 } else {
-    Write-Host "Git already installed at $gitPath" -ForegroundColor Green
-    $env:Path = "$HermesHome\git\bin;$env:Path"
+    Write-Host "[*] Already in user PATH." -ForegroundColor Green
 }
 
-# Check for uv (fast Python package manager)
-$uvExe = Join-Path $HermesHome "uv\uv.exe"
-if (-not (Test-Path $uvExe)) {
-    Write-Host "Installing uv..." -ForegroundColor Yellow
-    $uvUrl = "https://github.com/astral-sh/uv/releases/download/0.4.27/uv-x86_64-pc-windows-msvc.zip"
-    $uvZip = Join-Path $env:TEMP "uv.zip"
-    Invoke-WebRequest -Uri $uvUrl -OutFile $uvZip
-    Expand-Archive -Path $uvZip -DestinationPath "$HermesHome\uv" -Force
-    Remove-Item $uvZip -Force
-    $env:Path = "$HermesHome\uv;$env:Path"
+# -------------------------------------------------------------------
+# 8. Test the installation
+# -------------------------------------------------------------------
+Write-Host "[*] Testing hermes CLI..." -ForegroundColor Yellow
+$hermes = Get-Command hermes -ErrorAction SilentlyContinue
+if ($hermes) {
+    Write-Host "[*] Hermes CLI found at: $($hermes.Source)" -ForegroundColor Green
+    & hermes --help
 } else {
-    Write-Host "uv already installed" -ForegroundColor Green
-    $env:Path = "$HermesHome\uv;$env:Path"
+    Write-Host "[!] hermes not found on PATH. You may need to restart your terminal." -ForegroundColor Red
 }
 
-# Clone or update Hermes Agent repository
-$repoUrl = "https://github.com/NousResearch/hermes-agent.git"
-if (Test-Path (Join-Path $InstallDir ".git")) {
-    Write-Host "Updating existing repository..." -ForegroundColor Yellow
-    Push-Location $InstallDir
-    & git fetch --all --tags
-    if ($Tag) {
-        & git checkout "tags/$Tag" -B "install-tag"
-    } else {
-        & git checkout $Branch
-        & git pull origin $Branch
-    }
-    Pop-Location
-} else {
-    Write-Host "Cloning Hermes Agent repository..." -ForegroundColor Yellow
-    if ($Tag) {
-        & git clone --branch "$Tag" --depth 1 $repoUrl $InstallDir
-    } else {
-        & git clone --branch $Branch --depth 1 $repoUrl $InstallDir
-    }
-}
-
-# Create Python virtual environment using uv
-$venvPath = Join-Path $InstallDir ".venv"
-if (-not (Test-Path $venvPath)) {
-    Write-Host "Creating virtual environment..." -ForegroundColor Yellow
-    Push-Location $InstallDir
-    & "$HermesHome\uv\uv.exe" venv $venvPath
-    Pop-Location
-} else {
-    Write-Host "Virtual environment already exists" -ForegroundColor Green
-}
-
-# Install Hermes Agent and dependencies (Fixed Section)
-Write-Host "Installing Hermes Agent and dependencies..." -ForegroundColor Yellow
-Push-Location $InstallDir
-& "$HermesHome\uv\uv.exe" pip install --upgrade pip setuptools wheel
-& "$HermesHome\uv\uv.exe" pip install -e .
-Pop-Location
-
-# Create CLI entry point in bin folder
-$binDir = Join-Path $InstallDir "bin"
-$null = New-Item -ItemType Directory -Force -Path $binDir
-$hermesBat = Join-Path $binDir "hermes.bat"
-@"
-@echo off
-"$venvPath\Scripts\python.exe" "$InstallDir\hermes_agent\cli.py" %*
-"@ | Out-File -FilePath $hermesBat -Encoding ASCII
-
-# Add bin directory to user PATH
-Add-ToUserPath -NewPath $binDir
-
-# Set environment variables for the current session
-[Environment]::SetEnvironmentVariable("HERMES_HOME", $HermesHome, "User")
-[Environment]::SetEnvironmentVariable("HERMES_INSTALL_DIR", $InstallDir, "User")
-$env:HERMES_HOME = $HermesHome
-$env:HERMES_INSTALL_DIR = $InstallDir
-
-# Refresh PATH in current session (so hermes command is available immediately)
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-
-Write-Host "`nHermes Agent installation complete!" -ForegroundColor Green
-Write-Host "Installation directory: $InstallDir" -ForegroundColor Cyan
-Write-Host "Home directory: $HermesHome" -ForegroundColor Cyan
-Write-Host "You may need to restart your terminal for PATH changes to take effect." -ForegroundColor Yellow
-
-if (-not $SkipSetup) {
-    Write-Host "`nRunning setup wizard..." -ForegroundColor Cyan
-    & hermes setup
-} else {
-    Write-Host "`nSkipped setup. Run 'hermes setup' manually when ready." -ForegroundColor Yellow
-}
-
-Write-Host "`nTo verify installation, open a new terminal and run: hermes --version" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "  Installation complete!" -ForegroundColor Cyan
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "  You can now run 'hermes' from any terminal." -ForegroundColor White
+Write-Host "  All user data will be stored under: $INSTALL_ROOT" -ForegroundColor White
+Write-Host "  If the command is not found, restart your terminal or run:" -ForegroundColor White
+Write-Host "      `$env:Path = `"$VENV_SCRIPTS;`$env:Path`"" -ForegroundColor Gray
+Write-Host "============================================" -ForegroundColor Cyan
