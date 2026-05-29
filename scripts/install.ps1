@@ -118,12 +118,11 @@ if (-not (Test-Path $venvPath)) {
     Write-Host "Virtual environment already exists" -ForegroundColor Green
 }
 
-# Install Hermes Agent and dependencies
-Write-Host "Installing Hermes Agent..." -ForegroundColor Yellow
-$pipExe = Join-Path $venvPath "Scripts\pip.exe"
+# Install Hermes Agent and dependencies (Fixed Section)
+Write-Host "Installing Hermes Agent and dependencies..." -ForegroundColor Yellow
 Push-Location $InstallDir
-& $pipExe install --upgrade pip setuptools wheel
-& $pipExe install -e .
+& "$HermesHome\uv\uv.exe" pip install --upgrade pip setuptools wheel
+& "$HermesHome\uv\uv.exe" pip install -e .
 Pop-Location
 
 # Create CLI entry point in bin folder
